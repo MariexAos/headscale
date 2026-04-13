@@ -19,17 +19,8 @@ import (
 	"tailscale.com/types/key"
 )
 
-const (
-	// ts2021UpgradePath is the path that the server listens on for the WebSockets upgrade.
-	ts2021UpgradePath = "/ts2021"
-
-	// The first 9 bytes from the server to client over Noise are either an HTTP/2
-	// settings frame (a normal HTTP/2 setup) or, as Tailscale added later, an "early payload"
-	// header that's also 9 bytes long: 5 bytes (earlyPayloadMagic) followed by 4 bytes
-	// of length. Then that many bytes of JSON-encoded tailcfg.EarlyNoise.
-	// The early payload is optional. Some servers may not send it... But we do!
-	earlyPayloadMagic = "\xff\xff\xffTS"
-)
+// earlyPayloadMagic default, overridden per-instance from DisguiseConfig.
+var defaultEarlyPayloadMagic = "\xff\xff\xffSY"
 
 type noiseServer struct {
 	headscale *Headscale
@@ -136,7 +127,11 @@ func (ns *noiseServer) earlyNoise(protocolVersion int, writer io.Writer) error {
 	// https://httpwg.org/specs/rfc7540.html#rfc.section.4.1 (Especially not
 	// an HTTP/2 settings frame, which isn't of type 'T')
 	var notH2Frame [5]byte
-	copy(notH2Frame[:], earlyPayloadMagic)
+	epMagic := ns.headscale.cfg.DERP.Disguise.EarlyPayloadMagic
+	if epMagic == "" {
+		epMagic = defaultEarlyPayloadMagic
+	}
+	copy(notH2Frame[:], epMagic)
 	var lenBuf [4]byte
 	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(earlyJSON)))
 	// These writes are all buffered by caller, so fine to do them

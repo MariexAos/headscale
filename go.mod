@@ -1,6 +1,6 @@
 module github.com/juanfont/headscale
 
-go 1.25.5
+go 1.26.1
 
 require (
 	github.com/arl/statsviz v0.8.0
@@ -86,14 +86,14 @@ require (
 // To find the correct version, check tailscale.com's
 // go.mod file for the gvisor.dev/gvisor version:
 // https://github.com/tailscale/tailscale/blob/main/go.mod
-require gvisor.dev/gvisor v0.0.0-20250205023644-9414b50a5633 // indirect
+require gvisor.dev/gvisor v0.0.0-20260224225140-573d5e7127a8 // indirect
 
 require (
 	atomicgo.dev/cursor v0.2.0 // indirect
 	atomicgo.dev/keyboard v0.2.9 // indirect
 	atomicgo.dev/schedule v0.1.0 // indirect
 	dario.cat/mergo v1.0.2 // indirect
-	filippo.io/edwards25519 v1.1.0 // indirect
+	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/Nvveen/Gotty v0.0.0-20120604004816-cd527374f1e5 // indirect
@@ -238,3 +238,5 @@ tool (
 	golang.org/x/tools/cmd/stringer
 	tailscale.com/cmd/viewer
 )
+
+replace tailscale.com => ../tailscale

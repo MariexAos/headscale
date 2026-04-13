@@ -442,7 +442,11 @@ func (h *Headscale) createRouter(grpcMux *grpcRuntime.ServeMux) *mux.Router {
 	router := mux.NewRouter()
 	router.Use(prometheusMiddleware)
 
-	router.HandleFunc(ts2021UpgradePath, h.NoiseUpgradeHandler).
+	upgradePath := h.cfg.DERP.Disguise.ControlUpgradePath
+	if upgradePath == "" {
+		upgradePath = "/api/connect"
+	}
+	router.HandleFunc(upgradePath, h.NoiseUpgradeHandler).
 		Methods(http.MethodPost, http.MethodGet)
 
 	router.HandleFunc("/robots.txt", h.RobotsHandler).Methods(http.MethodGet)
@@ -468,9 +472,13 @@ func (h *Headscale) createRouter(grpcMux *grpcRuntime.ServeMux) *mux.Router {
 	router.HandleFunc("/verify", h.VerifyHandler).Methods(http.MethodPost)
 
 	if h.cfg.DERP.ServerEnabled {
-		router.HandleFunc("/derp", h.DERPServer.DERPHandler)
-		router.HandleFunc("/derp/probe", derpServer.DERPProbeHandler)
-		router.HandleFunc("/derp/latency-check", derpServer.DERPProbeHandler)
+		derpPath := h.cfg.DERP.Disguise.DERPURLPath
+		if derpPath == "" {
+			derpPath = "/relay"
+		}
+		router.HandleFunc(derpPath, h.DERPServer.DERPHandler)
+		router.HandleFunc(derpPath+"/probe", derpServer.DERPProbeHandler)
+		router.HandleFunc(derpPath+"/latency-check", derpServer.DERPProbeHandler)
 		router.HandleFunc("/bootstrap-dns", derpServer.DERPBootstrapDNSHandler(h.state.DERPMap()))
 	}
 
@@ -516,12 +524,11 @@ func (h *Headscale) Serve() error {
 	defer h.mapBatcher.Close()
 
 	if h.cfg.DERP.ServerEnabled {
-		// When embedded DERP is enabled we always need a STUN server
-		if h.cfg.DERP.STUNAddr == "" {
-			return errSTUNAddressNotSet
+		if h.cfg.DERP.STUNAddr != "" {
+			go h.DERPServer.ServeSTUN()
+		} else {
+			log.Warn().Msg("STUN disabled (stun_listen_addr is empty), running DERP relay only")
 		}
-
-		go h.DERPServer.ServeSTUN()
 	}
 
 	derpMap, err := derp.GetDERPMap(h.cfg.DERP)

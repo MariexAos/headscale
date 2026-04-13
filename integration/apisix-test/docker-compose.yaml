@@ -1,0 +1,160 @@
+# Serial chain topology:
+#   ts-node1 → nginx → APISIX → headscale(DERP999) → APISIX → ts-node2 → node3
+#
+#   nginx 只能访问 APISIX（不能直连 headscale）
+#   APISIX 是唯一能访问 headscale 的网关
+#
+#   net-node1           net-edge             net-server          net-node2        net-internal
+#   172.28.2.0/24       172.28.5.0/24        172.28.1.0/24       172.28.3.0/24    172.28.4.0/24
+#   ┌──────────┐       ┌──────────┐         ┌───────────┐       ┌──────────┐     ┌──────────┐
+#   │ ts-node1 │──────→│  nginx   │────────→│  APISIX   │──────→│ ts-node2 │────→│  node3   │
+#   └──────────┘       └──────────┘         │     ↓      │       └──────────┘     └──────────┘
+#                                           │ headscale  │
+#                                           │ DERP 999   │
+#                                           └───────────┘
+
+services:
+  headscale:
+    build:
+      context: ../../..
+      dockerfile: headscale/integration/apisix-test/Dockerfile.headscale
+    volumes:
+      - ./headscale/config.yaml:/etc/headscale/config.yaml:ro
+      - headscale-data:/var/lib/headscale
+      - headscale-run:/var/run/headscale
+    command: ["/bin/bash", "-c", "mkdir -p /var/lib/headscale /var/run/headscale && /usr/local/bin/headscale serve"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      # headscale 只在 net-server，只有 APISIX 能访问
+      net-server: { aliases: [headscale] }
+    restart: unless-stopped
+
+  # APISIX — 唯一能访问 headscale 的 API 网关
+  # 在 net-server（连 headscale） + net-edge（让 nginx ��发过来） + net-node2（让 ts-node2 直连）
+  apisix:
+    image: apache/apisix:3.11.0-debian
+    volumes:
+      - ./apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ./apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro
+    depends_on:
+      headscale: { condition: service_healthy }
+    networks:
+      net-server: { aliases: [apisix-server] }
+      net-edge: { aliases: [apisix-backend] }     # nginx 通过此别名转发
+      net-node2: { aliases: [gateway] }            # ts-node2 直连
+    restart: unless-stopped
+
+  # nginx — 前置入口，只能访问 APISIX（不能直连 headscale）
+  # 在 net-node1（接受 ts-node1） + net-edge（转发给 APISIX）
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      apisix: { condition: service_started }
+    networks:
+      net-node1: { aliases: [gateway] }            # ts-node1 通过此别名连接
+      net-edge: { aliases: [nginx-edge] }          # nginx 到 APISIX 的专用网络
+      # 注意：nginx 不在 net-server，不能直连 headscale
+    restart: unless-stopped
+
+  # ts-node1 — 外网开发者，只能到 nginx
+  ts-node1:
+    build:
+      context: ../../../tailscale
+      dockerfile: ../headscale/integration/apisix-test/Dockerfile.tailscale
+    volumes:
+      - ts-node1-state:/var/lib/tailscale
+    cap_add: [NET_ADMIN, SYS_MODULE]
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv6.conf.all.forwarding=1
+    depends_on:
+      nginx: { condition: service_started }
+    networks:
+      net-node1: { aliases: [ts-node1] }
+    command:
+      - /bin/sh
+      - -c
+      - |
+        mkdir -p /dev/net; [ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200
+        tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
+        sleep 3; tail -f /dev/null
+    restart: unless-stopped
+
+  # ts-node2 — 内网子���路由器，直连 APISIX + 内网
+  ts-node2:
+    build:
+      context: ../../../tailscale
+      dockerfile: ../headscale/integration/apisix-test/Dockerfile.tailscale
+    volumes:
+      - ts-node2-state:/var/lib/tailscale
+    cap_add: [NET_ADMIN, SYS_MODULE]
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv6.conf.all.forwarding=1
+    depends_on:
+      apisix: { condition: service_started }
+    networks:
+      net-node2: { aliases: [ts-node2] }
+      net-internal: { ipv4_address: 172.28.4.2, aliases: [ts-node2-internal] }
+    command:
+      - /bin/sh
+      - -c
+      - |
+        mkdir -p /dev/net; [ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200
+        tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
+        sleep 3; tail -f /dev/null
+    restart: unless-stopped
+
+  # node3 — 纯内网 Git
+  node3:
+    image: alpine:3.22
+    cap_add: [NET_ADMIN]
+    networks:
+      net-internal: { ipv4_address: 172.28.4.10, aliases: [git-server] }
+    command:
+      - /bin/sh
+      - -c
+      - |
+        apk add --no-cache git openssh-server python3
+        ssh-keygen -A
+        adduser -D -s /bin/sh gituser
+        echo "gituser:git123" | chpasswd
+        mkdir -p /home/gituser/repo.git
+        cd /home/gituser/repo.git && git init --bare
+        chown -R gituser:gituser /home/gituser
+        echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config
+        /usr/sbin/sshd
+        mkdir -p /tmp/www
+        echo '{"service":"internal-api","host":"node3"}' > /tmp/www/index.html
+        cd /tmp/www && python3 -m http.server 8080 --bind 0.0.0.0
+    restart: unless-stopped
+
+volumes:
+  headscale-data:
+  headscale-run:
+  ts-node1-state:
+  ts-node2-state:
+
+networks:
+  net-server:
+    driver: bridge
+    ipam: { config: [{ subnet: "172.28.1.0/24" }] }
+  net-edge:
+    driver: bridge
+    ipam: { config: [{ subnet: "172.28.5.0/24" }] }
+  net-node1:
+    driver: bridge
+    ipam: { config: [{ subnet: "172.28.2.0/24" }] }
+  net-node2:
+    driver: bridge
+    ipam: { config: [{ subnet: "172.28.3.0/24" }] }
+  net-internal:
+    driver: bridge
+    ipam: { config: [{ subnet: "172.28.4.0/24" }] }

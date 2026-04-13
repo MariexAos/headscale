@@ -1,0 +1,57 @@
+routes:
+  # 控制面 Noise 协议 (WebSocket 长连接)
+  - id: 1
+    uri: /api/connect
+    upstream:
+      nodes:
+        "headscale:8080": 1
+      type: roundrobin
+      timeout:
+        connect: 5
+        send: 300
+        read: 300
+    enable_websocket: true
+
+  # DERP 中继 (WebSocket 长连接)
+  - id: 2
+    uri: /relay
+    upstream:
+      nodes:
+        "headscale:8080": 1
+      type: roundrobin
+      timeout:
+        connect: 5
+        send: 3600
+        read: 3600
+    enable_websocket: true
+
+  # DERP probe/latency-check
+  - id: 3
+    uri: /relay/*
+    upstream:
+      nodes:
+        "headscale:8080": 1
+      type: roundrobin
+      timeout:
+        connect: 5
+        send: 3600
+        read: 3600
+    enable_websocket: true
+
+  # 健康检查
+  - id: 4
+    uri: /health
+    upstream:
+      nodes:
+        "headscale:8080": 1
+      type: roundrobin
+
+  # 服务器公钥
+  - id: 5
+    uri: /key
+    upstream:
+      nodes:
+        "headscale:8080": 1
+      type: roundrobin
+
+#END

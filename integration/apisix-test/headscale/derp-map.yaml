@@ -1,0 +1,15 @@
+# 独立 DERP — 仅内网可达 (172.28.4.20)
+# 外网客户端走内嵌 DERP 999 (通过 APISIX)
+# 内网客户端走独立 DERP 900 (直连，不绕公网)
+regions:
+  900:
+    regionid: 900
+    regioncode: office
+    regionname: "Office Internal DERP"
+    nodes:
+      - name: 900a
+        regionid: 900
+        hostname: 172.28.4.20
+        stunport: -1
+        stunonly: false
+        derpport: 10443

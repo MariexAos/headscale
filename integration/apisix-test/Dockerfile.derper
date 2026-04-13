@@ -1,0 +1,16 @@
+# Standalone DERP relay server built from modified tailscale source
+# Contains disguised protocol identifiers matching the client
+FROM golang:1.26-alpine AS build-env
+
+RUN apk add --no-cache git
+WORKDIR /go/src/tailscale
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -v \
+    -o /go/bin/derper ./cmd/derper
+
+FROM alpine:3.22
+RUN apk add --no-cache ca-certificates curl
+COPY --from=build-env /go/bin/derper /usr/local/bin/derper
+EXPOSE 80/tcp 443/tcp 3478/udp
+ENTRYPOINT ["/usr/local/bin/derper"]

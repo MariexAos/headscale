@@ -1,0 +1,33 @@
+# Build headscale with local modified tailscale dependency
+# Build context must be set to the parent directory containing both headscale/ and tailscale/
+FROM golang:1.26-alpine AS builder
+
+RUN apk add --no-cache git bash
+
+WORKDIR /go/src
+
+# Copy both projects
+COPY headscale/ /go/src/headscale/
+COPY tailscale/ /go/src/tailscale/
+
+WORKDIR /go/src/headscale
+
+# Download dependencies
+RUN go mod download
+
+# Build headscale (uses local tailscale via replace directive in go.mod)
+RUN CGO_ENABLED=0 GOOS=linux go build -o /go/bin/headscale ./cmd/headscale
+
+# Runtime stage
+FROM debian:trixie-slim
+
+RUN apt-get update && apt-get install --no-install-recommends --yes \
+    bash ca-certificates curl dnsutils jq python3 sqlite3 \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /var/run/headscale /var/lib/headscale
+
+COPY --from=builder /go/bin/headscale /usr/local/bin/headscale
+
+ENTRYPOINT []
+EXPOSE 8080/tcp

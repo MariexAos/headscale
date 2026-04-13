@@ -32,10 +32,7 @@ import (
 // server that the DERP HTTP client does not want the HTTP 101 response
 // headers and it will begin writing & reading the DERP protocol immediately
 // following its HTTP request.
-const (
-	fastStartHeader  = "Derp-Fast-Start"
-	DerpVerifyScheme = "headscale-derp-verify"
-)
+const DerpVerifyScheme = "headscale-derp-verify"
 
 // debugUseDERPIP is a debug-only flag that causes the DERP server to resolve
 // hostnames to IP addresses when generating the DERP region configuration.
@@ -126,15 +123,19 @@ func (d *DERPServer) GenerateRegion() (tailcfg.DERPRegion, error) {
 		},
 	}
 
-	_, portSTUNStr, err := net.SplitHostPort(d.cfg.STUNAddr)
-	if err != nil {
-		return tailcfg.DERPRegion{}, err
+	if d.cfg.STUNAddr != "" {
+		_, portSTUNStr, err := net.SplitHostPort(d.cfg.STUNAddr)
+		if err != nil {
+			return tailcfg.DERPRegion{}, err
+		}
+		portSTUN, err := strconv.Atoi(portSTUNStr)
+		if err != nil {
+			return tailcfg.DERPRegion{}, err
+		}
+		localDERPregion.Nodes[0].STUNPort = portSTUN
+	} else {
+		localDERPregion.Nodes[0].STUNPort = -1
 	}
-	portSTUN, err := strconv.Atoi(portSTUNStr)
-	if err != nil {
-		return tailcfg.DERPRegion{}, err
-	}
-	localDERPregion.Nodes[0].STUNPort = portSTUN
 
 	log.Info().Caller().Msgf("DERP region: %+v", localDERPregion)
 	log.Info().Caller().Msgf("DERP Nodes[0]: %+v", localDERPregion.Nodes[0])
@@ -149,7 +150,11 @@ func (d *DERPServer) DERPHandler(
 	log.Trace().Caller().Msgf("/derp request from %v", req.RemoteAddr)
 	upgrade := strings.ToLower(req.Header.Get("Upgrade"))
 
-	if upgrade != "websocket" && upgrade != "derp" {
+	expectedUpgrade := strings.ToLower(d.cfg.Disguise.DERPUpgradeHeader)
+	if expectedUpgrade == "" {
+		expectedUpgrade = "websocket"
+	}
+	if upgrade != "websocket" && upgrade != expectedUpgrade {
 		if upgrade != "" {
 			log.Warn().
 				Caller().
@@ -168,7 +173,11 @@ func (d *DERPServer) DERPHandler(
 		return
 	}
 
-	if strings.Contains(req.Header.Get("Sec-Websocket-Protocol"), "derp") {
+	wsSub := d.cfg.Disguise.DERPWSSubprotocol
+	if wsSub == "" {
+		wsSub = "relay-v1"
+	}
+	if strings.Contains(req.Header.Get("Sec-Websocket-Protocol"), wsSub) {
 		d.serveWebsocket(writer, req)
 	} else {
 		d.servePlain(writer, req)
@@ -176,8 +185,12 @@ func (d *DERPServer) DERPHandler(
 }
 
 func (d *DERPServer) serveWebsocket(writer http.ResponseWriter, req *http.Request) {
+	wsSub := d.cfg.Disguise.DERPWSSubprotocol
+	if wsSub == "" {
+		wsSub = "relay-v1"
+	}
 	websocketConn, err := websocket.Accept(writer, req, &websocket.AcceptOptions{
-		Subprotocols:   []string{"derp"},
+		Subprotocols:   []string{wsSub},
 		OriginPatterns: []string{"*"},
 		// Disable compression because DERP transmits WireGuard messages that
 		// are not compressible.
@@ -206,8 +219,8 @@ func (d *DERPServer) serveWebsocket(writer http.ResponseWriter, req *http.Reques
 		return
 	}
 	defer websocketConn.Close(websocket.StatusInternalError, "closing")
-	if websocketConn.Subprotocol() != "derp" {
-		websocketConn.Close(websocket.StatusPolicyViolation, "client must speak the derp subprotocol")
+	if websocketConn.Subprotocol() != wsSub {
+		websocketConn.Close(websocket.StatusPolicyViolation, "client must speak the expected subprotocol")
 
 		return
 	}
@@ -218,7 +231,11 @@ func (d *DERPServer) serveWebsocket(writer http.ResponseWriter, req *http.Reques
 }
 
 func (d *DERPServer) servePlain(writer http.ResponseWriter, req *http.Request) {
-	fastStart := req.Header.Get(fastStartHeader) == "1"
+	fsHeader := d.cfg.Disguise.DERPFastStartHeader
+	if fsHeader == "" {
+		fsHeader = "X-Fast-Start"
+	}
+	fastStart := req.Header.Get(fsHeader) == "1"
 
 	hijacker, ok := writer.(http.Hijacker)
 	if !ok {
@@ -256,11 +273,16 @@ func (d *DERPServer) servePlain(writer http.ResponseWriter, req *http.Request) {
 	if !fastStart {
 		pubKey := d.key.Public()
 		pubKeyStr, _ := pubKey.MarshalText() //nolint
+		upHeader := d.cfg.Disguise.DERPUpgradeHeader
+		if upHeader == "" {
+			upHeader = "websocket"
+		}
 		fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\n"+
-			"Upgrade: DERP\r\n"+
+			"Upgrade: %s\r\n"+
 			"Connection: Upgrade\r\n"+
-			"Derp-Version: %v\r\n"+
-			"Derp-Public-Key: %s\r\n\r\n",
+			"Relay-Version: %v\r\n"+
+			"Relay-Public-Key: %s\r\n\r\n",
+			upHeader,
 			derp.ProtocolVersion,
 			string(pubKeyStr))
 	}

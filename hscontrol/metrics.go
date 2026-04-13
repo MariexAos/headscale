@@ -3,6 +3,7 @@ package hscontrol
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus"
@@ -64,6 +65,14 @@ func prometheusMiddleware(next http.Handler) http.Handler {
 		// Ignore streaming and noise sessions
 		// it has its own router further down.
 		if path == "/ts2021" || path == "/machine/map" || path == "/derp" || path == "/derp/probe" || path == "/derp/latency-check" || path == "/bootstrap-dns" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Also skip metrics wrapping for disguised paths (control + DERP).
+		// The respWriterProm wrapper doesn't implement http.Hijacker,
+		// which is required by the Noise protocol upgrade.
+		if strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/relay") {
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -207,6 +207,36 @@ type DERPConfig struct {
 	UpdateFrequency                    time.Duration
 	IPv4                               string
 	IPv6                               string
+	Disguise                           DisguiseConfig
+}
+
+// DisguiseConfig holds protocol disguise parameters for avoiding DPI detection.
+// All values must match the corresponding client-side disguise configuration.
+type DisguiseConfig struct {
+	ControlUpgradePath  string `yaml:"control_upgrade_path"`
+	ControlUpgradeValue string `yaml:"control_upgrade_value"`
+	ControlHandshakeHdr string `yaml:"control_handshake_header"`
+	DERPURLPath         string `yaml:"derp_url_path"`
+	DERPUpgradeHeader   string `yaml:"derp_upgrade_header"`
+	DERPFastStartHeader string `yaml:"derp_fast_start_header"`
+	DERPWSSubprotocol   string `yaml:"derp_ws_subprotocol"`
+	DERPMagic           string `yaml:"derp_magic"`
+	EarlyPayloadMagic   string `yaml:"early_payload_magic"`
+}
+
+// DisguiseDefaults returns a DisguiseConfig with default disguised values.
+func DisguiseDefaults() DisguiseConfig {
+	return DisguiseConfig{
+		ControlUpgradePath:  "/api/connect",
+		ControlUpgradeValue: "h2c-protocol",
+		ControlHandshakeHdr: "X-Session-Init",
+		DERPURLPath:         "/relay",
+		DERPUpgradeHeader:   "websocket",
+		DERPFastStartHeader: "X-Fast-Start",
+		DERPWSSubprotocol:   "relay-v1",
+		DERPMagic:           "SYNC\xf0\x9f\x94\x91",
+		EarlyPayloadMagic:   "\xff\xff\xffSY",
+	}
 }
 
 type LogTailConfig struct {
@@ -557,8 +587,8 @@ func derpConfig() DERPConfig {
 		"derp.server.automatically_add_embedded_derp_region",
 	)
 	if serverEnabled && stunAddr == "" {
-		log.Fatal().
-			Msg("derp.server.stun_listen_addr must be set if derp.server.enabled is true")
+		log.Warn().
+			Msg("derp.server.stun_listen_addr is empty, STUN disabled, using DERP relay only")
 	}
 
 	urlStrs := viper.GetStringSlice("derp.urls")
@@ -587,6 +617,36 @@ func derpConfig() DERPConfig {
 	autoUpdate := viper.GetBool("derp.auto_update_enabled")
 	updateFrequency := viper.GetDuration("derp.update_frequency")
 
+	// Load disguise config with defaults.
+	disguise := DisguiseDefaults()
+	if v := viper.GetString("derp.disguise.control_upgrade_path"); v != "" {
+		disguise.ControlUpgradePath = v
+	}
+	if v := viper.GetString("derp.disguise.control_upgrade_value"); v != "" {
+		disguise.ControlUpgradeValue = v
+	}
+	if v := viper.GetString("derp.disguise.control_handshake_header"); v != "" {
+		disguise.ControlHandshakeHdr = v
+	}
+	if v := viper.GetString("derp.disguise.derp_url_path"); v != "" {
+		disguise.DERPURLPath = v
+	}
+	if v := viper.GetString("derp.disguise.derp_upgrade_header"); v != "" {
+		disguise.DERPUpgradeHeader = v
+	}
+	if v := viper.GetString("derp.disguise.derp_fast_start_header"); v != "" {
+		disguise.DERPFastStartHeader = v
+	}
+	if v := viper.GetString("derp.disguise.derp_ws_subprotocol"); v != "" {
+		disguise.DERPWSSubprotocol = v
+	}
+	if v := viper.GetString("derp.disguise.derp_magic"); v != "" {
+		disguise.DERPMagic = v
+	}
+	if v := viper.GetString("derp.disguise.early_payload_magic"); v != "" {
+		disguise.EarlyPayloadMagic = v
+	}
+
 	return DERPConfig{
 		ServerEnabled:                      serverEnabled,
 		ServerRegionID:                     serverRegionID,
@@ -602,6 +662,7 @@ func derpConfig() DERPConfig {
 		IPv4:                               ipv4,
 		IPv6:                               ipv6,
 		AutomaticallyAddEmbeddedDerpRegion: automaticallyAddEmbeddedDerpRegion,
+		Disguise:                           disguise,
 	}
 }
 

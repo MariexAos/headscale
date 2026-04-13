@@ -1,0 +1,27 @@
+# Build modified tailscale with disguise support
+# Build context must be set to the tailscale source directory
+FROM golang:1.26-alpine AS build-env
+
+RUN apk add --no-cache git
+
+WORKDIR /go/src/tailscale
+
+# Copy the local modified tailscale source
+COPY . .
+
+# Build with disguise defaults baked in
+RUN CGO_ENABLED=0 GOOS=linux go build -v \
+    -o /go/bin/tailscale ./cmd/tailscale && \
+    CGO_ENABLED=0 GOOS=linux go build -v \
+    -o /go/bin/tailscaled ./cmd/tailscaled
+
+FROM alpine:3.22
+
+RUN apk add --no-cache \
+    ca-certificates curl ip6tables iptables iproute2 \
+    bind-tools tcpdump
+
+COPY --from=build-env /go/bin/tailscale /usr/local/bin/tailscale
+COPY --from=build-env /go/bin/tailscaled /usr/local/bin/tailscaled
+
+RUN mkdir -p /var/lib/tailscale /var/run/tailscale
