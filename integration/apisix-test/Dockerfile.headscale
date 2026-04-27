@@ -1,5 +1,6 @@
-# Build headscale with local modified tailscale dependency
-# Build context must be set to the parent directory containing both headscale/ and tailscale/
+# Build Purr Hub (renamed headscale fork) with local modified tailscale dep.
+# Build context must be set to the parent directory containing both
+# headscale/ and tailscale/.
 FROM golang:1.26-alpine AS builder
 
 RUN apk add --no-cache git bash
@@ -15,8 +16,14 @@ WORKDIR /go/src/headscale
 # Download dependencies
 RUN go mod download
 
-# Build headscale (uses local tailscale via replace directive in go.mod)
-RUN CGO_ENABLED=0 GOOS=linux go build -o /go/bin/headscale ./cmd/headscale
+# Brand ldflags — binary is named purrhub and root cobra command shows
+# "Usage: purrhub [command]".
+ARG BRAND_LDFLAGS="-X github.com/juanfont/headscale/cmd/headscale/cli.cmdName=purrhub -s -w"
+
+# Build purrhub (uses local tailscale via replace directive in go.mod)
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
+        -ldflags "${BRAND_LDFLAGS}" \
+        -o /go/bin/purrhub ./cmd/headscale
 
 # Runtime stage
 FROM debian:trixie-slim
@@ -25,9 +32,11 @@ RUN apt-get update && apt-get install --no-install-recommends --yes \
     bash ca-certificates curl dnsutils jq python3 sqlite3 \
   && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /var/run/headscale /var/lib/headscale
+RUN mkdir -p /var/run/purrhub /var/lib/purrhub /etc/purrhub
 
-COPY --from=builder /go/bin/headscale /usr/local/bin/headscale
+# Binary at the conventional location — callers pass -c /etc/purrhub/config.yaml
+# explicitly (see compose command and run-test.sh).
+COPY --from=builder /go/bin/purrhub /usr/local/bin/purrhub
 
 ENTRYPOINT []
 EXPOSE 8080/tcp

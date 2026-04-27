@@ -130,8 +130,13 @@ func filterPreReleasesIfStable(versionFunc func() string) func(string) bool {
 	}
 }
 
+// cmdName is the program name shown in cobra usage output ("Usage: <cmdName> ...").
+// Default is the upstream value; production builds override via
+// -ldflags "-X github.com/juanfont/headscale/cmd/headscale/cli.cmdName=...".
+var cmdName = "headscale"
+
 var rootCmd = &cobra.Command{
-	Use:   "headscale",
+	Use:   cmdName,
 	Short: "headscale - a Tailscale control server",
 	Long: `
 headscale is an open source implementation of the Tailscale control server

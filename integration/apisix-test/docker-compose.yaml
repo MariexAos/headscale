@@ -14,15 +14,16 @@
 #                                           └───────────┘
 
 services:
+  # purrhub — control plane (renamed headscale fork)
   headscale:
     build:
       context: ../../..
       dockerfile: headscale/integration/apisix-test/Dockerfile.headscale
     volumes:
-      - ./headscale/config.yaml:/etc/headscale/config.yaml:ro
-      - headscale-data:/var/lib/headscale
-      - headscale-run:/var/run/headscale
-    command: ["/bin/bash", "-c", "mkdir -p /var/lib/headscale /var/run/headscale && /usr/local/bin/headscale serve"]
+      - ./headscale/config.yaml:/etc/purrhub/config.yaml:ro
+      - headscale-data:/var/lib/purrhub
+      - headscale-run:/var/run/purrhub
+    command: ["/bin/bash", "-c", "mkdir -p /var/lib/purrhub /var/run/purrhub && /usr/local/bin/purrhub serve -c /etc/purrhub/config.yaml"]
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 5s
@@ -30,8 +31,8 @@ services:
       retries: 10
       start_period: 10s
     networks:
-      # headscale 只在 net-server，只有 APISIX 能访问
-      net-server: { aliases: [headscale] }
+      # purrhub 只在 net-server,只有 APISIX 能访问
+      net-server: { aliases: [headscale, purrhub] }
     restart: unless-stopped
 
   # APISIX — 唯一能访问 headscale 的 API 网关
@@ -69,7 +70,7 @@ services:
       context: ../../../tailscale
       dockerfile: ../headscale/integration/apisix-test/Dockerfile.tailscale
     volumes:
-      - ts-node1-state:/var/lib/tailscale
+      - ts-node1-state:/var/lib/purr
     cap_add: [NET_ADMIN, SYS_MODULE]
     sysctls:
       - net.ipv4.ip_forward=1
@@ -82,8 +83,10 @@ services:
       - /bin/sh
       - -c
       - |
-        mkdir -p /dev/net; [ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200
-        tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
+        mkdir -p /dev/net /var/run/purr; [ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200
+        # Purr-branded paths so `ls /var/run` shows /var/run/purr/purrd.sock,
+        # not /var/run/tailscale/tailscaled.sock.
+        purrd --state=/var/lib/purr/purrd.state --socket=/var/run/purr/purrd.sock &
         sleep 3; tail -f /dev/null
     restart: unless-stopped
 
@@ -93,7 +96,7 @@ services:
       context: ../../../tailscale
       dockerfile: ../headscale/integration/apisix-test/Dockerfile.tailscale
     volumes:
-      - ts-node2-state:/var/lib/tailscale
+      - ts-node2-state:/var/lib/purr
     cap_add: [NET_ADMIN, SYS_MODULE]
     sysctls:
       - net.ipv4.ip_forward=1
@@ -107,8 +110,10 @@ services:
       - /bin/sh
       - -c
       - |
-        mkdir -p /dev/net; [ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200
-        tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
+        mkdir -p /dev/net /var/run/purr; [ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200
+        # Purr-branded paths so `ls /var/run` shows /var/run/purr/purrd.sock,
+        # not /var/run/tailscale/tailscaled.sock.
+        purrd --state=/var/lib/purr/purrd.state --socket=/var/run/purr/purrd.sock &
         sleep 3; tail -f /dev/null
     restart: unless-stopped
 

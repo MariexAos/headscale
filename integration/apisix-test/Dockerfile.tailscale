@@ -1,5 +1,5 @@
-# Build modified tailscale with disguise support
-# Build context must be set to the tailscale source directory
+# Build Purr client (renamed tailscale fork) with brand ldflags injection.
+# Build context must be set to the tailscale source directory.
 FROM golang:1.26-alpine AS build-env
 
 RUN apk add --no-cache git
@@ -9,11 +9,16 @@ WORKDIR /go/src/tailscale
 # Copy the local modified tailscale source
 COPY . .
 
-# Build with disguise defaults baked in
-RUN CGO_ENABLED=0 GOOS=linux go build -v \
-    -o /go/bin/tailscale ./cmd/tailscale && \
-    CGO_ENABLED=0 GOOS=linux go build -v \
-    -o /go/bin/tailscaled ./cmd/tailscaled
+# Brand ldflags — output binaries are named purr/purrd and the CLI banner
+# / Windows-service-name / Hostinfo App field reflect the Purr brand.
+ARG BRAND_LDFLAGS="-X tailscale.com/cmd/tailscale/cli.progName=purr -X main.serviceName=PurrDaemon -s -w"
+
+RUN CGO_ENABLED=0 GOOS=linux go build -v -trimpath \
+        -ldflags "${BRAND_LDFLAGS}" \
+        -o /go/bin/purr ./cmd/tailscale && \
+    CGO_ENABLED=0 GOOS=linux go build -v -trimpath \
+        -ldflags "${BRAND_LDFLAGS}" \
+        -o /go/bin/purrd ./cmd/tailscaled
 
 FROM alpine:3.22
 
@@ -21,7 +26,10 @@ RUN apk add --no-cache \
     ca-certificates curl ip6tables iptables iproute2 \
     bind-tools tcpdump
 
-COPY --from=build-env /go/bin/tailscale /usr/local/bin/tailscale
-COPY --from=build-env /go/bin/tailscaled /usr/local/bin/tailscaled
+COPY --from=build-env /go/bin/purr  /usr/local/bin/purr
+COPY --from=build-env /go/bin/purrd /usr/local/bin/purrd
 
-RUN mkdir -p /var/lib/tailscale /var/run/tailscale
+# Purr-branded paths — visible to anyone running ls /var/run /var/lib inside
+# the container (operability requirement). Callers pass --socket / --state
+# explicitly (see compose command and run-test.sh) —档 A convention.
+RUN mkdir -p /var/lib/purr /var/run/purr

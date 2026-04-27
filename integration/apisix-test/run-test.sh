@@ -16,6 +16,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 COMPOSE="docker compose -f ${SCRIPT_DIR}/docker-compose.yaml -p apisix-test"
+
+# Brand binaries with their explicit flags — daemon defaults to upstream
+# paths (paths.go unchanged), so every caller passes them.
+PURR="purr --socket=/var/run/purr/purrd.sock"
+PHUB="purrhub -c /etc/purrhub/config.yaml"
+
 PASS=0
 FAIL=0
 TOTAL=0
@@ -64,7 +70,7 @@ pass "Headscale is healthy"
 
 log "Waiting for APISIX to be ready..."
 for i in $(seq 1 20); do
-    if curl -sf http://localhost:8880/health >/dev/null 2>&1; then
+    if ${COMPOSE} exec -T headscale curl -sf http://apisix:80/health >/dev/null 2>&1; then
         break
     fi
     if [ "$i" -eq 20 ]; then
@@ -81,7 +87,7 @@ pass "APISIX is ready and proxying to headscale"
 log "Phase 1: Verifying disguised endpoints through APISIX..."
 
 # The /key endpoint should be reachable through APISIX (returns 400 without params, which is fine)
-KEY_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8880/key 2>/dev/null || echo "000")
+KEY_CODE=$(${COMPOSE} exec -T headscale curl -s -o /dev/null -w "%{http_code}" http://apisix:80/key 2>/dev/null || echo "000")
 if [ "$KEY_CODE" != "404" ] && [ "$KEY_CODE" != "502" ] && [ "$KEY_CODE" != "000" ]; then
     pass "APISIX proxies /key endpoint (HTTP $KEY_CODE)"
 else
@@ -89,7 +95,7 @@ else
 fi
 
 # The disguised control path should be reachable (will return upgrade required, but not 404)
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8880/api/connect 2>/dev/null || echo "000")
+HTTP_CODE=$(${COMPOSE} exec -T headscale curl -s -o /dev/null -w "%{http_code}" http://apisix:80/api/connect 2>/dev/null || echo "000")
 if [ "$HTTP_CODE" != "404" ] && [ "$HTTP_CODE" != "000" ]; then
     pass "Disguised control path /api/connect is routed (HTTP $HTTP_CODE)"
 else
@@ -98,7 +104,7 @@ fi
 
 # The old /ts2021 path should NOT be routed (caught by wildcard, headscale returns 404 or unexpected)
 # This verifies the disguise is active on the server side
-HTTP_CODE_OLD=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8880/ts2021 2>/dev/null || echo "000")
+HTTP_CODE_OLD=$(${COMPOSE} exec -T headscale curl -s -o /dev/null -w "%{http_code}" http://apisix:80/ts2021 2>/dev/null || echo "000")
 log "Old path /ts2021 returns HTTP $HTTP_CODE_OLD (expected: not a successful upgrade)"
 
 # ──────────────────────────────────────────────
@@ -106,16 +112,16 @@ log "Old path /ts2021 returns HTTP $HTTP_CODE_OLD (expected: not a successful up
 # ──────────────────────────────────────────────
 log "Phase 2: Creating user and pre-auth keys..."
 
-${COMPOSE} exec -T headscale headscale users create testuser 2>/dev/null || true
+${COMPOSE} exec -T headscale $PHUB users create testuser 2>/dev/null || true
 
 # Get user ID (headscale v0.28+ uses numeric user IDs)
-USER_ID=$(${COMPOSE} exec -T headscale headscale users list -o json 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+USER_ID=$(${COMPOSE} exec -T headscale $PHUB users list -o json 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
 if [ -z "$USER_ID" ]; then
     USER_ID=1
 fi
 log "User ID: $USER_ID"
 
-KEY1=$(${COMPOSE} exec -T headscale headscale preauthkeys create --user "$USER_ID" --reusable --expiration 1h 2>/dev/null | grep -o 'hskey-[^ ]*' | tr -d '[:space:]')
+KEY1=$(${COMPOSE} exec -T headscale $PHUB preauthkeys create --user "$USER_ID" --reusable --expiration 1h 2>/dev/null | grep -o 'hskey-[^ ]*' | tr -d '[:space:]')
 if [ -n "$KEY1" ]; then
     pass "Created pre-auth key: ${KEY1:0:20}..."
 else
@@ -132,9 +138,9 @@ log "Phase 3: Registering tailscale nodes through APISIX..."
 log "Waiting for tailscaled to be ready on nodes..."
 for node in ts-node1 ts-node2; do
     for i in $(seq 1 15); do
-        if ${COMPOSE} exec -T "$node" tailscale status 2>&1 | grep -q "Logged out" || \
-           ${COMPOSE} exec -T "$node" tailscale status 2>&1 | grep -q "Log in" || \
-           ${COMPOSE} exec -T "$node" tailscale status 2>&1 | grep -q "NeedsLogin"; then
+        if ${COMPOSE} exec -T "$node" $PURR status 2>&1 | grep -q "Logged out" || \
+           ${COMPOSE} exec -T "$node" $PURR status 2>&1 | grep -q "Log in" || \
+           ${COMPOSE} exec -T "$node" $PURR status 2>&1 | grep -q "NeedsLogin"; then
             break
         fi
         [ "$i" -eq 15 ] && log "Warning: $node tailscaled may not be ready"
@@ -142,46 +148,59 @@ for node in ts-node1 ts-node2; do
     done
 done
 
-# Resolve APISIX's internal IP (private IP disables HTTPS fallback in tailscale)
-APISIX_IP=$(${COMPOSE} exec -T ts-node1 getent hosts apisix 2>/dev/null | awk '{print $1}' | head -1)
-if [ -z "$APISIX_IP" ]; then
-    APISIX_IP="apisix"
-fi
-log "APISIX internal IP: $APISIX_IP"
+# Each node resolves its own `gateway` alias to a private RFC1918 IP. Using
+# the IP (not the hostname) in --login-server stops Tailscale from doing
+# its "force HTTPS-on-443" fallback for non-IP-literal login servers.
+#
+#   ts-node1's gateway → nginx     (net-node1 side)
+#   ts-node2's gateway → apisix    (net-node2 side)
+GW_IP_NODE1=$(${COMPOSE} exec -T ts-node1 getent hosts gateway 2>/dev/null | awk '{print $1}' | head -1)
+GW_IP_NODE2=$(${COMPOSE} exec -T ts-node2 getent hosts gateway 2>/dev/null | awk '{print $1}' | head -1)
+log "ts-node1 gateway IP: $GW_IP_NODE1   (→ nginx)"
+log "ts-node2 gateway IP: $GW_IP_NODE2   (→ apisix)"
 
-# Node 1: connect through APISIX using private IP (prevents HTTPS fallback to 443)
+if [ -z "$GW_IP_NODE1" ] || [ -z "$GW_IP_NODE2" ]; then
+    fail "Could not resolve gateway alias inside one of the nodes"
+    exit 1
+fi
+
+# Node 1: connect through nginx using its private IP. Accept routes so it
+# can reach node3 (git/http server) through the ts-node2 subnet router.
 log "Registering ts-node1..."
-${COMPOSE} exec -T ts-node1 tailscale up \
-    --login-server="http://${APISIX_IP}:80" \
+${COMPOSE} exec -T ts-node1 $PURR up \
+    --login-server="http://${GW_IP_NODE1}:80" \
     --authkey="$KEY1" \
     --hostname=ts-node1 \
+    --accept-routes \
     --accept-dns=false \
     --timeout=60s 2>&1 || true
 
-# Node 2: connect through APISIX
+# Node 2: connect through APISIX directly (it's in net-node2 with apisix alias=gateway).
+# Advertises the internal LAN (172.28.4.0/24 → node3) so ts-node1 can reach git.
 log "Registering ts-node2..."
-${COMPOSE} exec -T ts-node2 tailscale up \
-    --login-server="http://${APISIX_IP}:80" \
+${COMPOSE} exec -T ts-node2 $PURR up \
+    --login-server="http://${GW_IP_NODE2}:80" \
     --authkey="$KEY1" \
     --hostname=ts-node2 \
+    --advertise-routes=172.28.4.0/24 \
     --accept-dns=false \
     --timeout=60s 2>&1 || true
 
 # Wait for registration to complete
 for i in $(seq 1 15); do
-    NODE_COUNT_TMP=$(${COMPOSE} exec -T headscale headscale nodes list -o json 2>/dev/null | grep -c '"id"' 2>/dev/null || echo "0")
+    NODE_COUNT_TMP=$(${COMPOSE} exec -T headscale $PHUB nodes list -o json 2>/dev/null | grep -c '"id"' 2>/dev/null || echo "0")
     [ "$NODE_COUNT_TMP" -ge 2 ] 2>/dev/null && break
     sleep 2
 done
 
 # Verify both nodes are registered
-NODE_COUNT=$(${COMPOSE} exec -T headscale headscale nodes list -o json 2>/dev/null | grep -c '"id"' 2>/dev/null || echo "0")
+NODE_COUNT=$(${COMPOSE} exec -T headscale $PHUB nodes list -o json 2>/dev/null | grep -c '"id"' 2>/dev/null || echo "0")
 if [ "$NODE_COUNT" -ge 2 ]; then
     pass "Both nodes registered ($NODE_COUNT nodes found)"
 else
     fail "Expected 2+ nodes, found $NODE_COUNT"
     # Show debug info
-    ${COMPOSE} exec -T headscale headscale nodes list 2>/dev/null || true
+    ${COMPOSE} exec -T headscale $PHUB nodes list 2>/dev/null || true
 fi
 
 # ──────────────────────────────────────────────
@@ -189,8 +208,8 @@ fi
 # ──────────────────────────────────────────────
 log "Phase 4: Checking tailscale status..."
 
-STATUS1=$(${COMPOSE} exec -T ts-node1 tailscale status --json 2>/dev/null || echo "{}")
-STATUS2=$(${COMPOSE} exec -T ts-node2 tailscale status --json 2>/dev/null || echo "{}")
+STATUS1=$(${COMPOSE} exec -T ts-node1 $PURR status --json 2>/dev/null || echo "{}")
+STATUS2=$(${COMPOSE} exec -T ts-node2 $PURR status --json 2>/dev/null || echo "{}")
 
 # Check node1 sees itself as connected
 SELF1=$(echo "$STATUS1" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('Self',{}).get('Online', False))" 2>/dev/null || echo "False")
@@ -228,7 +247,7 @@ if [ -n "$NODE2_IP" ]; then
     pass "ts-node1 sees ts-node2 at $NODE2_IP"
 
     # Ping from node1 to node2
-    PING_RESULT=$(${COMPOSE} exec -T ts-node1 tailscale ping --c 3 --timeout 10s "$NODE2_IP" 2>&1 || echo "failed")
+    PING_RESULT=$(${COMPOSE} exec -T ts-node1 $PURR ping --c 3 --timeout 10s "$NODE2_IP" 2>&1 || echo "failed")
     if echo "$PING_RESULT" | grep -qi "pong"; then
         pass "ts-node1 can ping ts-node2 via tailnet"
 
@@ -289,13 +308,73 @@ done
 # ──────────────────────────────────────────────
 log "Phase 7: Running netcheck..."
 
-NETCHECK=$(${COMPOSE} exec -T ts-node1 tailscale netcheck 2>&1 || echo "failed")
+NETCHECK=$(${COMPOSE} exec -T ts-node1 $PURR netcheck 2>&1 || echo "failed")
 echo "$NETCHECK"
 
 if echo "$NETCHECK" | grep -qi "999"; then
     pass "DERP region 999 (embedded) is visible in netcheck"
 else
     log "DERP region 999 not explicitly shown in netcheck output"
+fi
+
+# ──────────────────────────────────────────────
+# Phase 8: Subnet router — ts-node1 reaches node3 (git/http server) through
+# ts-node2 via tailnet, all relayed via DERP.
+# ──────────────────────────────────────────────
+log "Phase 8: Subnet routing — ts-node1 → ts-node2 → node3 (172.28.4.10) ..."
+
+# Find ts-node2's node ID and approve its advertised route
+NODE2_ID=$(${COMPOSE} exec -T headscale $PHUB nodes list -o json 2>/dev/null | \
+    python3 -c "
+import sys, json
+nodes = json.load(sys.stdin)
+for n in nodes:
+    if n.get('given_name') == 'ts-node2' or n.get('name') == 'ts-node2':
+        print(n.get('id'))
+        break
+" 2>/dev/null || echo "")
+
+if [ -z "$NODE2_ID" ]; then
+    fail "Could not resolve ts-node2 node ID for route approval"
+else
+    log "ts-node2 node ID: $NODE2_ID"
+    APPROVE_OUT=$(${COMPOSE} exec -T headscale $PHUB nodes approve-routes -i "$NODE2_ID" --routes 172.28.4.0/24 2>&1 || true)
+    log "Route approve: $(echo "$APPROVE_OUT" | tail -3 | head -1)"
+
+    # Give the netmap a couple of seconds to propagate to ts-node1
+    sleep 5
+
+    # ts-node1 should now see 172.28.4.0/24 in its routing table (via tailnet)
+    ROUTE_CHECK=$(${COMPOSE} exec -T ts-node1 ip route 2>/dev/null | grep -c '172.28.4' || true)
+    if [ "$ROUTE_CHECK" -ge 1 ]; then
+        pass "ts-node1 received subnet route 172.28.4.0/24"
+    else
+        log "Subnet route not yet in ts-node1 routing table (tailnet may still be settling)"
+    fi
+
+    # The headline test: ts-node1 fetches HTTP from node3 via tailnet.
+    # node3 is on net-internal only — ts-node1 has no direct route to it.
+    # The only way this works is via tailnet → ts-node2 → forward → node3.
+    log "ts-node1 → http://172.28.4.10:8080 (node3) via tailnet ..."
+    HTTP_OUT=$(${COMPOSE} exec -T ts-node1 curl -sf --max-time 15 http://172.28.4.10:8080/ 2>&1 || echo "FAIL: $?")
+    if echo "$HTTP_OUT" | grep -q '"service":"internal-api"'; then
+        pass "ts-node1 fetched node3 HTTP via tailnet subnet route"
+        log "  payload: $HTTP_OUT"
+    else
+        fail "ts-node1 could not fetch http://172.28.4.10:8080/ via tailnet"
+        log "  curl output: $HTTP_OUT"
+        log "  ts-node1 routes:"
+        ${COMPOSE} exec -T ts-node1 ip route 2>&1 | sed 's/^/    /' | tail -10 || true
+    fi
+
+    # Bonus: node3 also runs sshd with a bare git repo. Use nc to probe the
+    # SSH port (we don't actually git-clone — that needs git + SSH key
+    # plumbing not present in the ts-node1 image).
+    if ${COMPOSE} exec -T ts-node1 nc -z -w 5 172.28.4.10 22 >/dev/null 2>&1; then
+        pass "ts-node1 can reach git server SSH (172.28.4.10:22) via tailnet"
+    else
+        log "SSH probe to git server failed (HTTP test already proves L4 connectivity)"
+    fi
 fi
 
 # ──────────────────────────────────────────────
