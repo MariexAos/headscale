@@ -1,28 +1,28 @@
 # Serial chain topology:
-#   ts-node1 → nginx → APISIX → headscale(DERP999) → APISIX → ts-node2 → node3
+#   purr-node1 → nginx → APISIX → purrhub(DERP999) → APISIX → purr-node2 → node3
 #
-#   nginx 只能访问 APISIX（不能直连 headscale）
-#   APISIX 是唯一能访问 headscale 的网关
+#   nginx 只能访问 APISIX（不能直连 purrhub）
+#   APISIX 是唯一能访问 purrhub 的网关
 #
-#   net-node1           net-edge             net-server          net-node2        net-internal
-#   172.28.2.0/24       172.28.5.0/24        172.28.1.0/24       172.28.3.0/24    172.28.4.0/24
-#   ┌──────────┐       ┌──────────┐         ┌───────────┐       ┌──────────┐     ┌──────────┐
-#   │ ts-node1 │──────→│  nginx   │────────→│  APISIX   │──────→│ ts-node2 │────→│  node3   │
-#   └──────────┘       └──────────┘         │     ↓      │       └──────────┘     └──────────┘
-#                                           │ headscale  │
-#                                           │ DERP 999   │
-#                                           └───────────┘
+#   net-node1            net-edge             net-server          net-node2         net-internal
+#   172.28.2.0/24        172.28.5.0/24        172.28.1.0/24       172.28.3.0/24     172.28.4.0/24
+#   ┌────────────┐       ┌──────────┐         ┌───────────┐       ┌────────────┐    ┌──────────┐
+#   │ purr-node1 │──────→│  nginx   │────────→│  APISIX   │──────→│ purr-node2 │───→│  node3   │
+#   └────────────┘       └──────────┘         │     ↓      │      └────────────┘    └──────────┘
+#                                             │  purrhub   │
+#                                             │ DERP 999   │
+#                                             └───────────┘
 
 services:
   # purrhub — control plane (renamed headscale fork)
-  headscale:
+  purrhub:
     build:
       context: ../../..
-      dockerfile: purrhub/integration/apisix-test/Dockerfile.headscale
+      dockerfile: purrhub/integration/apisix-test/Dockerfile.purrhub
     volumes:
-      - ./headscale/config.yaml:/etc/purrhub/config.yaml:ro
-      - headscale-data:/var/lib/purrhub
-      - headscale-run:/var/run/purrhub
+      - ./purrhub-config/config.yaml:/etc/purrhub/config.yaml:ro
+      - purrhub-data:/var/lib/purrhub
+      - purrhub-run:/var/run/purrhub
     command: ["/bin/bash", "-c", "mkdir -p /var/lib/purrhub /var/run/purrhub && /usr/local/bin/purrhub serve -c /etc/purrhub/config.yaml"]
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
@@ -32,26 +32,26 @@ services:
       start_period: 10s
     networks:
       # purrhub 只在 net-server,只有 APISIX 能访问
-      net-server: { aliases: [headscale, purrhub] }
+      net-server: { aliases: [purrhub] }
     restart: unless-stopped
 
-  # APISIX — 唯一能访问 headscale 的 API 网关
-  # 在 net-server（连 headscale） + net-edge（让 nginx ��发过来） + net-node2（让 ts-node2 直连）
+  # APISIX — 唯一能访问 purrhub 的 API 网关
+  # 在 net-server（连 purrhub） + net-edge（让 nginx 转发过来） + net-node2（让 purr-node2 直连）
   apisix:
     image: apache/apisix:3.11.0-debian
     volumes:
       - ./apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
       - ./apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro
     depends_on:
-      headscale: { condition: service_healthy }
+      purrhub: { condition: service_healthy }
     networks:
       net-server: { aliases: [apisix-server] }
       net-edge: { aliases: [apisix-backend] }     # nginx 通过此别名转发
-      net-node2: { aliases: [gateway] }            # ts-node2 直连
+      net-node2: { aliases: [gateway] }            # purr-node2 直连
     restart: unless-stopped
 
-  # nginx — 前置入口，只能访问 APISIX（不能直连 headscale）
-  # 在 net-node1（接受 ts-node1） + net-edge（转发给 APISIX）
+  # nginx — 前置入口，只能访问 APISIX（不能直连 purrhub）
+  # 在 net-node1（接受 purr-node1） + net-edge（转发给 APISIX）
   nginx:
     image: nginx:alpine
     volumes:
@@ -59,18 +59,18 @@ services:
     depends_on:
       apisix: { condition: service_started }
     networks:
-      net-node1: { aliases: [gateway] }            # ts-node1 通过此别名连接
+      net-node1: { aliases: [gateway] }            # purr-node1 通过此别名连接
       net-edge: { aliases: [nginx-edge] }          # nginx 到 APISIX 的专用网络
-      # 注意：nginx 不在 net-server，不能直连 headscale
+      # 注意：nginx 不在 net-server，不能直连 purrhub
     restart: unless-stopped
 
-  # ts-node1 — 外网开发者，只能到 nginx
-  ts-node1:
+  # purr-node1 — 外网开发者，只能到 nginx
+  purr-node1:
     build:
       context: ../../../purr
-      dockerfile: ../purrhub/integration/apisix-test/Dockerfile.tailscale
+      dockerfile: ../purrhub/integration/apisix-test/Dockerfile.purr
     volumes:
-      - ts-node1-state:/var/lib/purr
+      - purr-node1-state:/var/lib/purr
     cap_add: [NET_ADMIN, SYS_MODULE]
     sysctls:
       - net.ipv4.ip_forward=1
@@ -78,7 +78,7 @@ services:
     depends_on:
       nginx: { condition: service_started }
     networks:
-      net-node1: { aliases: [ts-node1] }
+      net-node1: { aliases: [purr-node1] }
     command:
       - /bin/sh
       - -c
@@ -90,13 +90,13 @@ services:
         sleep 3; tail -f /dev/null
     restart: unless-stopped
 
-  # ts-node2 — 内网子���路由器，直连 APISIX + 内网
-  ts-node2:
+  # purr-node2 — 内网子网路由器，直连 APISIX + 内网
+  purr-node2:
     build:
       context: ../../../purr
-      dockerfile: ../purrhub/integration/apisix-test/Dockerfile.tailscale
+      dockerfile: ../purrhub/integration/apisix-test/Dockerfile.purr
     volumes:
-      - ts-node2-state:/var/lib/purr
+      - purr-node2-state:/var/lib/purr
     cap_add: [NET_ADMIN, SYS_MODULE]
     sysctls:
       - net.ipv4.ip_forward=1
@@ -104,8 +104,8 @@ services:
     depends_on:
       apisix: { condition: service_started }
     networks:
-      net-node2: { aliases: [ts-node2] }
-      net-internal: { ipv4_address: 172.28.4.2, aliases: [ts-node2-internal] }
+      net-node2: { aliases: [purr-node2] }
+      net-internal: { ipv4_address: 172.28.4.2, aliases: [purr-node2-internal] }
     command:
       - /bin/sh
       - -c
@@ -142,10 +142,10 @@ services:
     restart: unless-stopped
 
 volumes:
-  headscale-data:
-  headscale-run:
-  ts-node1-state:
-  ts-node2-state:
+  purrhub-data:
+  purrhub-run:
+  purr-node1-state:
+  purr-node2-state:
 
 networks:
   net-server:

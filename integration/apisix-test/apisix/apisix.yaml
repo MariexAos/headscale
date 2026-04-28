@@ -4,7 +4,7 @@ routes:
     uri: /api/connect
     upstream:
       nodes:
-        "headscale:8080": 1
+        "purrhub:8080": 1
       type: roundrobin
       timeout:
         connect: 5
@@ -17,7 +17,7 @@ routes:
     uri: /relay
     upstream:
       nodes:
-        "headscale:8080": 1
+        "purrhub:8080": 1
       type: roundrobin
       timeout:
         connect: 5
@@ -30,7 +30,7 @@ routes:
     uri: /relay/*
     upstream:
       nodes:
-        "headscale:8080": 1
+        "purrhub:8080": 1
       type: roundrobin
       timeout:
         connect: 5
@@ -43,7 +43,7 @@ routes:
     uri: /health
     upstream:
       nodes:
-        "headscale:8080": 1
+        "purrhub:8080": 1
       type: roundrobin
 
   # 服务器公钥
@@ -51,7 +51,7 @@ routes:
     uri: /key
     upstream:
       nodes:
-        "headscale:8080": 1
+        "purrhub:8080": 1
       type: roundrobin
 
 #END
