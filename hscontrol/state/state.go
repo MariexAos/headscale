@@ -1061,6 +1061,34 @@ func (s *State) SetRegistrationCacheEntry(id types.RegistrationID, entry types.R
 	s.registrationCache.Set(id, entry)
 }
 
+// PendingRegistration is a snapshot of a single in-flight node registration —
+// a client has called `up` without an authkey but no admin has approved it yet.
+type PendingRegistration struct {
+	ID         types.RegistrationID
+	Hostname   string
+	MachineKey string
+	NodeKey    string
+	ExpiresAt  time.Time
+}
+
+// ListRegistrationCache returns a snapshot of all in-flight (not yet approved)
+// node registrations from the in-memory cache.
+func (s *State) ListRegistrationCache() []PendingRegistration {
+	items := s.registrationCache.Items()
+	out := make([]PendingRegistration, 0, len(items))
+	for id, item := range items {
+		n := item.Object.Node
+		out = append(out, PendingRegistration{
+			ID:         id,
+			Hostname:   n.Hostname,
+			MachineKey: n.MachineKey.String(),
+			NodeKey:    n.NodeKey.String(),
+			ExpiresAt:  time.Unix(0, item.Expiration),
+		})
+	}
+	return out
+}
+
 // logHostinfoValidation logs warnings when hostinfo is nil or has empty hostname.
 func logHostinfoValidation(machineKey, nodeKey, username, hostname string, hostinfo *tailcfg.Hostinfo) {
 	if hostinfo == nil {

@@ -494,6 +494,28 @@ func (api headscaleV1APIServer) RenameNode(
 	return &v1.RenameNodeResponse{Node: node.Proto()}, nil
 }
 
+// ListPendingNodes returns nodes that have initiated registration via the
+// browser/manual-approval flow and are waiting for an admin to call
+// `nodes register --user USERNAME --key REG_ID`. The cache is in-memory and
+// not persisted, so entries disappear on server restart.
+func (api headscaleV1APIServer) ListPendingNodes(
+	ctx context.Context,
+	request *v1.ListPendingNodesRequest,
+) (*v1.ListPendingNodesResponse, error) {
+	pending := api.h.state.ListRegistrationCache()
+	out := make([]*v1.PendingNode, 0, len(pending))
+	for _, p := range pending {
+		out = append(out, &v1.PendingNode{
+			RegistrationId: p.ID.String(),
+			Hostname:       p.Hostname,
+			MachineKey:     p.MachineKey,
+			NodeKey:        p.NodeKey,
+			ExpiresAt:      timestamppb.New(p.ExpiresAt),
+		})
+	}
+	return &v1.ListPendingNodesResponse{PendingNodes: out}, nil
+}
+
 func (api headscaleV1APIServer) ListNodes(
 	ctx context.Context,
 	request *v1.ListNodesRequest,

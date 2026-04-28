@@ -140,3 +140,19 @@ message BackfillNodeIPsRequest {
 message BackfillNodeIPsResponse {
   repeated string changes = 1;
 }
+
+// PendingNode represents a node that has initiated registration via the
+// browser/manual-approval flow but has not yet been registered by an admin.
+message PendingNode {
+  string registration_id = 1;
+  string hostname = 2;
+  string machine_key = 3;
+  string node_key = 4;
+  google.protobuf.Timestamp expires_at = 5;
+}
+
+message ListPendingNodesRequest {}
+
+message ListPendingNodesResponse {
+  repeated PendingNode pending_nodes = 1;
+}

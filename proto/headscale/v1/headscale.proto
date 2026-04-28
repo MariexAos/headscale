@@ -130,6 +130,15 @@ service HeadscaleService {
     };
   }
 
+  // ListPendingNodes returns nodes that initiated registration via the
+  // browser/manual-approval flow and are awaiting admin approval.
+  rpc ListPendingNodes(ListPendingNodesRequest)
+      returns (ListPendingNodesResponse) {
+    option (google.api.http) = {
+      get : "/api/v1/node/pending"
+    };
+  }
+
   rpc BackfillNodeIPs(BackfillNodeIPsRequest)
       returns (BackfillNodeIPsResponse) {
     option (google.api.http) = {

@@ -254,6 +254,29 @@
         ]
       }
     },
+    "/api/v1/node/pending": {
+      "get": {
+        "summary": "ListPendingNodes returns nodes that initiated registration via the\nbrowser/manual-approval flow and are awaiting admin approval.",
+        "operationId": "HeadscaleService_ListPendingNodes",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1ListPendingNodesResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "tags": [
+          "HeadscaleService"
+        ]
+      }
+    },
     "/api/v1/node/register": {
       "post": {
         "operationId": "HeadscaleService_RegisterNode",
@@ -1101,6 +1124,18 @@
         }
       }
     },
+    "v1ListPendingNodesResponse": {
+      "type": "object",
+      "properties": {
+        "pendingNodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1PendingNode"
+          }
+        }
+      }
+    },
     "v1ListPreAuthKeysResponse": {
       "type": "object",
       "properties": {
@@ -1203,6 +1238,28 @@
           }
         }
       }
+    },
+    "v1PendingNode": {
+      "type": "object",
+      "properties": {
+        "registrationId": {
+          "type": "string"
+        },
+        "hostname": {
+          "type": "string"
+        },
+        "machineKey": {
+          "type": "string"
+        },
+        "nodeKey": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "description": "PendingNode represents a node that has initiated registration via the\nbrowser/manual-approval flow but has not yet been registered by an admin."
     },
     "v1PreAuthKey": {
       "type": "object",

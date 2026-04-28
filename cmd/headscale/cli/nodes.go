@@ -31,6 +31,8 @@ func init() {
 	listNodeRoutesCmd.Flags().Uint64P("identifier", "i", 0, "Node identifier (ID)")
 	nodeCmd.AddCommand(listNodeRoutesCmd)
 
+	nodeCmd.AddCommand(listPendingNodesCmd)
+
 	registerNodeCmd.Flags().StringP("user", "u", "", "User")
 
 	registerNodeCmd.Flags().StringP("namespace", "n", "", "User")
@@ -181,6 +183,65 @@ var listNodesCmd = &cobra.Command{
 				output,
 			)
 		}
+	},
+}
+
+var listPendingNodesCmd = &cobra.Command{
+	Use:     "list-pending",
+	Short:   "List nodes awaiting admin approval (browser/manual flow)",
+	Aliases: []string{"pending", "list-pending-nodes"},
+	Run: func(cmd *cobra.Command, args []string) {
+		output, _ := cmd.Flags().GetString("output")
+
+		ctx, client, conn, cancel := newHeadscaleCLIWithConfig()
+		defer cancel()
+		defer conn.Close()
+
+		response, err := client.ListPendingNodes(ctx, &v1.ListPendingNodesRequest{})
+		if err != nil {
+			ErrorOutput(err, "Cannot list pending nodes: "+status.Convert(err).Message(), output)
+		}
+
+		if output != "" {
+			SuccessOutput(response.GetPendingNodes(), "", output)
+			return
+		}
+
+		pending := response.GetPendingNodes()
+		if len(pending) == 0 {
+			fmt.Println("No nodes awaiting approval.")
+			return
+		}
+
+		tableData := pterm.TableData{
+			{"Hostname", "Registration ID", "MachineKey", "NodeKey", "Expires"},
+		}
+		for _, p := range pending {
+			exp := ""
+			if p.GetExpiresAt() != nil {
+				exp = p.GetExpiresAt().AsTime().Format("2006-01-02 15:04")
+			}
+			mk := p.GetMachineKey()
+			nk := p.GetNodeKey()
+			if len(mk) > 12 {
+				mk = mk[:12] + "..."
+			}
+			if len(nk) > 12 {
+				nk = nk[:12] + "..."
+			}
+			tableData = append(tableData, []string{
+				p.GetHostname(),
+				p.GetRegistrationId(),
+				mk, nk, exp,
+			})
+		}
+
+		if err := pterm.DefaultTable.WithHasHeader().WithData(tableData).Render(); err != nil {
+			ErrorOutput(err, fmt.Sprintf("Failed to render pterm table: %s", err), output)
+		}
+
+		fmt.Println()
+		fmt.Println("Approve with:  purrhub nodes register --user USERNAME --key REGISTRATION_ID")
 	},
 }
 

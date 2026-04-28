@@ -1,27 +1,41 @@
+# syntax=docker/dockerfile:1.6
 # Build Purr Hub (renamed headscale fork) with local modified tailscale dep.
 # Build context must be set to the parent directory containing both
 # purrhub/ and purr/.
+#
+# BuildKit cache mounts keep /go/pkg/mod (modules) and /root/.cache/go-build
+# (build cache) warm across rebuilds, so a code edit only recompiles changed
+# packages instead of re-downloading and re-building everything.
 FROM golang:1.26-alpine AS builder
 
 RUN apk add --no-cache git bash
 
 WORKDIR /go/src
 
-# Copy both projects
-COPY purrhub/ /go/src/purrhub/
-COPY purr/    /go/src/purr/
+# Module manifests first — these are the cache key for `go mod download`.
+# purrhub's go.mod has `replace tailscale.com => ../purr`, so copy purr's
+# go.mod alongside or download will fail trying to resolve the replace.
+COPY purrhub/go.mod purrhub/go.sum /go/src/purrhub/
+COPY purr/go.mod    purr/go.sum    /go/src/purr/
 
 WORKDIR /go/src/purrhub
 
-# Download dependencies
-RUN go mod download
+# Pre-warm the module cache. Even if the source changes later, this layer
+# is reused as long as go.{mod,sum} are unchanged.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download
 
-# Brand ldflags — binary is named purrhub and root cobra command shows
-# "Usage: purrhub [command]".
+# Now copy the actual source. Edits to .go files invalidate this layer
+# and below — but module download above stays cached.
+COPY purrhub/ /go/src/purrhub/
+COPY purr/    /go/src/purr/
+
 ARG BRAND_LDFLAGS="-X github.com/juanfont/headscale/cmd/headscale/cli.cmdName=purrhub -s -w"
 
-# Build purrhub (uses local tailscale via replace directive in go.mod)
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath \
         -ldflags "${BRAND_LDFLAGS}" \
         -o /go/bin/purrhub ./cmd/headscale
 
@@ -34,8 +48,6 @@ RUN apt-get update && apt-get install --no-install-recommends --yes \
 
 RUN mkdir -p /var/run/purrhub /var/lib/purrhub /etc/purrhub
 
-# Binary at the conventional location — callers pass -c /etc/purrhub/config.yaml
-# explicitly (see compose command and run-test.sh).
 COPY --from=builder /go/bin/purrhub /usr/local/bin/purrhub
 
 ENTRYPOINT []

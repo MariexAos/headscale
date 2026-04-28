@@ -1,0 +1,139 @@
+# Authorization-flow integration test — flat topology, no proxy.
+#
+#   net-control 172.30.1.0/24       net-internal 172.30.4.0/24
+#   ┌──────────────┐                 ┌──────────────────┐
+#   │  purrhub     │                 │  node-internal   │
+#   │  .10:8080    │                 │  .10 (HTTP :8080)│
+#   └──────────────┘                 └──────────────────┘
+#         ▲    ▲                               ▲
+#         │    │                               │
+#   ┌─────┴─┐ ┌┴────────┐                      │
+#   │ purr- │ │ purr-   ├──────────────────────┘
+#   │authkey│ │ browser │  (subnet routing target via tailnet)
+#   │  .20  │ │  .30    │
+#   └───┬───┘ └─────────┘
+#       │ also on net-internal .20 (advertises 172.30.4.0/24 as router)
+#       ▼
+#   net-internal
+
+services:
+  purrhub:
+    build:
+      context: ../../..
+      dockerfile: purrhub/integration/apisix-test/Dockerfile.purrhub
+    volumes:
+      - ./purrhub-config/config.yaml:/etc/purrhub/config.yaml:ro
+      - purrhub-data:/var/lib/purrhub
+      - purrhub-run:/var/run/purrhub
+    command: ["/bin/bash", "-c", "mkdir -p /var/lib/purrhub /var/run/purrhub && /usr/local/bin/purrhub serve -c /etc/purrhub/config.yaml"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      net-control: { ipv4_address: 172.30.1.10 }
+    restart: unless-stopped
+
+  # Mode 1 client + subnet router. Registers via pre-auth-key, advertises
+  # 172.30.4.0/24 so peers can reach node-internal through it.
+  purr-authkey:
+    build:
+      context: ../../../purr
+      dockerfile: ../purrhub/integration/apisix-test/Dockerfile.purr
+    volumes:
+      - purr-authkey-state:/var/lib/purr
+    cap_add: [NET_ADMIN, SYS_MODULE]
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv6.conf.all.forwarding=1
+    depends_on:
+      purrhub: { condition: service_healthy }
+    networks:
+      net-control:  { ipv4_address: 172.30.1.20 }
+      net-internal: { ipv4_address: 172.30.4.20 }
+    command:
+      - /bin/sh
+      - -c
+      - |
+        mkdir -p /dev/net /var/run/purr; [ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200
+        purrd --state=/var/lib/purr/purrd.state --socket=/var/run/purr/purrd.sock &
+        sleep 3; tail -f /dev/null
+    restart: unless-stopped
+
+  # Mode 2 client. Registers via browser/manual-approval flow. No routes —
+  # relies on the subnet route published by purr-authkey to reach the
+  # internal network.
+  purr-browser:
+    build:
+      context: ../../../purr
+      dockerfile: ../purrhub/integration/apisix-test/Dockerfile.purr
+    volumes:
+      - purr-browser-state:/var/lib/purr
+    cap_add: [NET_ADMIN, SYS_MODULE]
+    sysctls:
+      - net.ipv4.ip_forward=1
+    depends_on:
+      purrhub: { condition: service_healthy }
+    networks:
+      net-control: { ipv4_address: 172.30.1.30 }
+    command:
+      - /bin/sh
+      - -c
+      - |
+        mkdir -p /dev/net /var/run/purr; [ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200
+        purrd --state=/var/lib/purr/purrd.state --socket=/var/run/purr/purrd.sock &
+        sleep 3; tail -f /dev/null
+    restart: unless-stopped
+
+  # Pure-internal target. Application-level source-IP filter enforces that
+  # the request must arrive with a 172.30.4.0/24 source — so the only path
+  # is tailnet → router (which SNATs to its net-internal IP). A direct
+  # cross-bridge request would arrive with a 172.30.1.x source and be 403'd.
+  node-internal:
+    image: alpine:3.22
+    networks:
+      net-internal: { ipv4_address: 172.30.4.10 }
+    command:
+      - /bin/sh
+      - -c
+      - |
+        apk add --no-cache python3
+        cat > /server.py <<'PY'
+        import http.server, ipaddress, socketserver
+        # Only the subnet router (purr-authkey on net-internal) should reach
+        # us; Docker cross-bridge SNATs to the bridge gateway 172.30.4.1
+        # which we explicitly disallow.
+        ALLOWED = {ipaddress.ip_address("172.30.4.20")}
+        BODY = b'{"service":"internal-target","host":"node-internal"}'
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                ip = ipaddress.ip_address(self.client_address[0])
+                if ip not in ALLOWED:
+                    self.send_error(403, "src not router: %s" % ip); return
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(BODY)))
+                self.end_headers(); self.wfile.write(BODY)
+            def log_message(self, *a): pass
+        socketserver.TCPServer.allow_reuse_address = True
+        with socketserver.TCPServer(("0.0.0.0", 8080), H) as s:
+            s.serve_forever()
+        PY
+        exec python3 /server.py
+    restart: unless-stopped
+
+volumes:
+  purrhub-data:
+  purrhub-run:
+  purr-authkey-state:
+  purr-browser-state:
+
+networks:
+  net-control:
+    driver: bridge
+    ipam: { config: [{ subnet: "172.30.1.0/24" }] }
+  net-internal:
+    driver: bridge
+    ipam: { config: [{ subnet: "172.30.4.0/24" }] }

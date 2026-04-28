@@ -9,12 +9,12 @@ import (
 
 func RegisterWeb(registrationID types.RegistrationID) *elem.Element {
 	return HtmlStructure(
-		elem.Title(nil, elem.Text("Registration - Headscale")),
+		elem.Title(nil, elem.Text("Registration - Purr Hub")),
 		mdTypesetBody(
 			headscaleLogo(),
 			H1(elem.Text("Machine registration")),
-			P(elem.Text("Run the command below in the headscale server to add this machine to your network:")),
-			Pre(PreCode(fmt.Sprintf("headscale nodes register --key %s --user USERNAME", registrationID.String()))),
+			P(elem.Text("Run the command below on the Purr Hub server to add this machine to your network:")),
+			Pre(PreCode(fmt.Sprintf("purrhub nodes register --key %s --user USERNAME", registrationID.String()))),
 			pageFooter(),
 		),
 	)
