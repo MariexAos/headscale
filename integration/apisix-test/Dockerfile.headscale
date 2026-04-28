@@ -1,6 +1,6 @@
 # Build Purr Hub (renamed headscale fork) with local modified tailscale dep.
 # Build context must be set to the parent directory containing both
-# headscale/ and tailscale/.
+# purrhub/ and purr/.
 FROM golang:1.26-alpine AS builder
 
 RUN apk add --no-cache git bash
@@ -8,10 +8,10 @@ RUN apk add --no-cache git bash
 WORKDIR /go/src
 
 # Copy both projects
-COPY headscale/ /go/src/headscale/
-COPY tailscale/ /go/src/tailscale/
+COPY purrhub/ /go/src/purrhub/
+COPY purr/    /go/src/purr/
 
-WORKDIR /go/src/headscale
+WORKDIR /go/src/purrhub
 
 # Download dependencies
 RUN go mod download

@@ -18,7 +18,7 @@ services:
   headscale:
     build:
       context: ../../..
-      dockerfile: headscale/integration/apisix-test/Dockerfile.headscale
+      dockerfile: purrhub/integration/apisix-test/Dockerfile.headscale
     volumes:
       - ./headscale/config.yaml:/etc/purrhub/config.yaml:ro
       - headscale-data:/var/lib/purrhub
@@ -67,8 +67,8 @@ services:
   # ts-node1 — 外网开发者，只能到 nginx
   ts-node1:
     build:
-      context: ../../../tailscale
-      dockerfile: ../headscale/integration/apisix-test/Dockerfile.tailscale
+      context: ../../../purr
+      dockerfile: ../purrhub/integration/apisix-test/Dockerfile.tailscale
     volumes:
       - ts-node1-state:/var/lib/purr
     cap_add: [NET_ADMIN, SYS_MODULE]
@@ -93,8 +93,8 @@ services:
   # ts-node2 — 内网子���路由器，直连 APISIX + 内网
   ts-node2:
     build:
-      context: ../../../tailscale
-      dockerfile: ../headscale/integration/apisix-test/Dockerfile.tailscale
+      context: ../../../purr
+      dockerfile: ../purrhub/integration/apisix-test/Dockerfile.tailscale
     volumes:
       - ts-node2-state:/var/lib/purr
     cap_add: [NET_ADMIN, SYS_MODULE]

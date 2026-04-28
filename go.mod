@@ -239,4 +239,4 @@ tool (
 	tailscale.com/cmd/viewer
 )
 
-replace tailscale.com => ../tailscale
+replace tailscale.com => ../purr
